@@ -1,0 +1,63 @@
+
+// Scrape Prometheus /metrics endpoint 
+prometheus.scrape "default" {
+    targets = [
+		{ "__address__" = env("LOCAL_HOSTED_PROMETHEUS_URL") },
+	]	
+
+    forward_to = [prometheus.remote_write.grafana_cloud_prometheus.receiver]
+}
+
+// Send Prometheus data to GCloud
+prometheus.remote_write "grafana_cloud_prometheus" {
+	endpoint {
+		url = env("GCLOUD_HOSTED_METRICS_URL")
+
+		basic_auth {
+			username = env("GCLOUD_HOSTED_METRICS_ID")
+			password = env("GCLOUD_RW_API_KEY")
+		}
+	}
+}
+
+// Setup gRPC and HTTP listeners for both logs and traces
+otelcol.receiver.otlp "default" {
+	grpc {}
+	http {}
+
+	output {
+		logs    = [otelcol.exporter.loki.grafana_cloud_loki.input]
+		traces  = [otelcol.exporter.otlp.grafana_cloud_tempo.input]
+	}
+}
+
+// Export otel-collected logs to Loki
+otelcol.exporter.loki "grafana_cloud_loki" {
+	forward_to = [loki.write.grafana_cloud_loki.receiver]
+}
+
+// Send Loki logs to GCloud
+loki.write "grafana_cloud_loki" {
+	endpoint {
+		url = env("GCLOUD_HOSTED_LOGS_URL")
+
+		basic_auth {
+			username = env("GCLOUD_HOSTED_LOGS_ID")
+			password = env("GCLOUD_RW_API_KEY")
+		}
+	}
+}
+
+// Export otel-collected traces to GCloud
+otelcol.exporter.otlp "grafana_cloud_tempo" {
+	client {
+		endpoint = env("GCLOUD_HOSTED_TEMPO_URL")
+		auth     = otelcol.auth.basic.grafana_cloud_tempo.handler
+	}
+}
+
+// Uses gRPC, which does not allow you to send sensitive credentials (like auth) over insecure channels.
+otelcol.auth.basic "grafana_cloud_tempo" {
+	username = env("GCLOUD_HOSTED_TEMPO_ID")
+	password = env("GCLOUD_RW_API_KEY")
+}
